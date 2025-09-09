@@ -4,38 +4,43 @@ from preprocessing import preprocess_mdp
 from prediction import load_model
 from fastapi.middleware.cors import CORSMiddleware
 from network_analysis import build_graph, find_attack_paths
+from starlette.responses import Response
 from firebase_sync import push_alert
 import pandas as pd
 import tempfile
 import os
 
 app = FastAPI()
+from starlette.responses import Response
 
-# --- Add CORS middleware to allow frontend requests ---
+ALLOWED_ORIGINS = [
+    "https://auraaii.netlify.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # explicit
+    allow_headers=["Authorization", "Content-Type", "Accept"],           # explicit (no "*")
+    expose_headers=["*"],                                                # optional
+    max_age=600,                                                         # optional
+)
 
-
-app = FastAPI()
+# Explicit preflight handler (belt-and-suspenders)
+@app.options("/api/login")
+async def options_login() -> Response:
+    return Response(status_code=204)
 
 @app.post("/api/login")
 async def receive_login(request: Request):
     data = await request.json()
     print("Login from:", data)
     return {"message": "Login data received"}
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5174",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "https://auraaii.netlify.app",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 model = None
 

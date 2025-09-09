@@ -1,7 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile,Request, File, Form
 from crawling import crawl_website
 from preprocessing import preprocess_mdp
 from prediction import load_model
+from fastapi.middleware.cors import CORSMiddleware
 from network_analysis import build_graph, find_attack_paths
 from firebase_sync import push_alert
 import pandas as pd
@@ -11,7 +12,16 @@ import os
 app = FastAPI()
 
 # --- Add CORS middleware to allow frontend requests ---
-from fastapi.middleware.cors import CORSMiddleware
+
+
+
+app = FastAPI()
+
+@app.post("/api/login")
+async def receive_login(request: Request):
+    data = await request.json()
+    print("Login from:", data)
+    return {"message": "Login data received"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,6 +30,7 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "https://auraaii.netlify.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

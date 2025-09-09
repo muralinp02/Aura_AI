@@ -23,19 +23,44 @@ const LoginPage = () => {
   const [success, setSuccess] = useState<string | null>(null);
 
   // Login handler with Firebase
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      setSuccess("Login successful!");
-      navigate("/dashboard");
-    } catch (err: any) {
-      setError(err.message || "Login failed.");
-    }
-  };
+ const API = import.meta.env.VITE_API_BASE;
 
+const handleLogin = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setError(null);
+  setSuccess(null);
+
+  try {
+    // Firebase login
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+
+    // Get Firebase ID token
+    const token = await user.getIdToken();
+
+    // Optional: Send to your backend
+    const backendRes = await fetch(`${API}/api/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`, // Optional: if backend verifies Firebase token
+      },
+      body: JSON.stringify({
+        uid: user.uid,
+        email: user.email,
+        login_time: new Date().toISOString(),
+      }),
+    });
+
+    if (!backendRes.ok) throw new Error("Backend login failed");
+
+    setSuccess("Login successful!");
+    navigate("/dashboard");
+  } catch (err: any) {
+    console.error("Login error:", err);
+    setError(err.message || "Login failed.");
+  }
+};
   // Signup handler with Firebase
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();

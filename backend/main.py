@@ -42,6 +42,13 @@ def get_model():
     if model is None:
         model = load_model()
     return model
+from fastapi import Request
+
+@app.post("/api/login")
+async def receive_login(request: Request):
+    data = await request.json()
+    print("Login from:", data)
+    return {"message": "Login data received"}
 
 @app.post("/crawl")
 def crawl(url: str = Form(...)):

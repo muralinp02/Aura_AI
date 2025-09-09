@@ -11,7 +11,6 @@ import tempfile
 import os
 
 app = FastAPI()
-from starlette.responses import Response
 
 ALLOWED_ORIGINS = [
     "https://auraaii.netlify.app",
@@ -26,21 +25,15 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],  # explicit
-    allow_headers=["Authorization", "Content-Type", "Accept"],           # explicit (no "*")
-    expose_headers=["*"],                                                # optional
-    max_age=600,                                                         # optional
+    allow_headers=["Authorization", "Content-Type", "Accept"],           # explicit
+    expose_headers=["*"],
+    max_age=600,
 )
 
-# Explicit preflight handler (belt-and-suspenders)
+# Explicit preflight handler (belt & suspenders)
 @app.options("/api/login")
 async def options_login() -> Response:
     return Response(status_code=204)
-
-@app.post("/api/login")
-async def receive_login(request: Request):
-    data = await request.json()
-    print("Login from:", data)
-    return {"message": "Login data received"}
 
 model = None
 

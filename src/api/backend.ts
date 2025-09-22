@@ -1,8 +1,7 @@
 import axios, { AxiosError } from "axios";
 
 // Read base URL from env, fallback to 127.0.0.1 for Windows stability
-const API_BASE =
-  import.meta.env.VITE_API_BASE?.trim() || "http://127.0.0.1:8000";
+const API_BASE = "https://aura-ai-6iua.onrender.com";
 
 // Single axios instance (helps with headers, timeouts, logging)
 export const api = axios.create({

@@ -31,7 +31,7 @@ const ScanContext = createContext<ScanContextType | undefined>(undefined);
 let globalScanResult: any = null;
 
 // API base (keep 8000 since your uvicorn runs there)
-const API_BASE = import.meta.env.VITE_API_BASE?.trim() || "http://127.0.0.1:8000";
+const API_BASE = "https://aura-ai-6iua.onrender.com";
 
 export function ScanProvider({ children }: { children: React.ReactNode }) {
   const [scanResult, setScanResult] = useState<any>(globalScanResult);

@@ -9,17 +9,140 @@ from datetime import datetime
 import pandas as pd
 import tempfile
 import os
+import re
+from urllib.parse import urljoin, urlparse
+import requests
+from bs4 import BeautifulSoup
+import ssl, socket
 
 # ----------------------------
 # Safe imports (fallbacks if modules aren't present in deploy)
 # ----------------------------
 try:
-    from crawling import crawl_website  # must return {"endpoints": [...], "forms": [...]}
+    from crawling import crawl_website  # if you have a crawling module, prefer it
 except Exception:
+    # fallback crawler (safe, non-intrusive): fetch pages from same host, extract links & forms
     def crawl_website(url: str):
-        base = url.rstrip("/")
-        # simple, predictable fallback so UI has something to draw
-        return {"endpoints": [base, f"{base}/login", f"{base}/profile"], "forms": []}
+        """
+        Simple, polite BFS crawler that:
+         - ensures URL is https:// or http://
+         - fetches the start URL (and some same-domain links up to a limit)
+         - extracts form actions and anchors
+         - returns a dict with endpoints, pages, forms, headers, and tls info
+        """
+        if not url:
+            return {"error": "No URL provided"}
+        url = url.strip()
+        if not re.match(r"^https?://", url):
+            url = "https://" + url
+
+        try:
+            parsed = urlparse(url)
+            base_netloc = parsed.netloc
+            base_scheme = parsed.scheme
+            base_root = f"{base_scheme}://{base_netloc}"
+        except Exception:
+            return {"error": "Invalid URL"}
+
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Aura-AI-Crawler/1.0 (+https://example/)"})
+        REQUEST_TIMEOUT = 8
+        MAX_PAGES = 30
+        MAX_LINKS_PER_PAGE = 80
+
+        def same_domain(u):
+            try:
+                return urlparse(u).netloc == base_netloc
+            except Exception:
+                return False
+
+        discovered = set()
+        queue = [url]
+        discovered.add(url)
+        pages_info = []
+        endpoints = []
+        forms = []
+        security_headers = {}
+        server_info = {}
+
+        def fetch_page(u):
+            try:
+                r = session.get(u, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            except Exception as e:
+                return {"url": u, "error": str(e)}
+            headers = {k.lower(): v for k, v in r.headers.items()}
+            # gather some security-relevant headers
+            for h in ("content-security-policy", "strict-transport-security", "x-frame-options", "x-content-type-options", "referrer-policy"):
+                if h in headers and h not in security_headers:
+                    security_headers[h] = headers[h]
+            server_info["server"] = headers.get("server")
+            content_type = headers.get("content-type", "")
+            links = []
+            page_forms = []
+            if "html" in content_type.lower():
+                try:
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    anchors = soup.find_all("a", href=True)[:MAX_LINKS_PER_PAGE]
+                    for a in anchors:
+                        href = a["href"].strip()
+                        if not href:
+                            continue
+                        full = urljoin(u, href)
+                        if same_domain(full):
+                            links.append(full)
+                    for f in soup.find_all("form")[:50]:
+                        action = f.get("action") or u
+                        method = (f.get("method") or "get").lower()
+                        full_action = urljoin(u, action)
+                        inputs = []
+                        for inp in f.find_all(["input", "textarea", "select"]):
+                            name = inp.get("name")
+                            itype = inp.get("type") or inp.name
+                            inputs.append({"name": name, "type": itype})
+                        page_forms.append({"action": full_action, "method": method, "inputs": inputs})
+                except Exception:
+                    pass
+            return {"url": u, "status": r.status_code, "content_type": content_type, "links": links, "forms": page_forms}
+
+        # BFS-ish crawl
+        while queue and len(discovered) <= MAX_PAGES:
+            cur = queue.pop(0)
+            result = fetch_page(cur)
+            pages_info.append({"url": cur, "status": result.get("status"), "error": result.get("error")})
+            if not result.get("error"):
+                endpoints.append(result.get("url"))
+                for f in result.get("forms", []):
+                    forms.append(f)
+                for link in result.get("links", []):
+                    if link not in discovered and len(discovered) < MAX_PAGES:
+                        discovered.add(link)
+                        queue.append(link)
+
+        # TLS info best-effort
+        tls_info = {}
+        try:
+            host = base_netloc.split(":")[0]
+            ctx = ssl.create_default_context()
+            with socket.create_connection((host, 443), timeout=5) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    cert = ssock.getpeercert()
+                    not_after = cert.get("notAfter")
+                    tls_info["raw"] = cert
+                    tls_info["notAfter"] = not_after
+        except Exception as e:
+            tls_info["error"] = str(e)
+
+        return {
+            "url": url,
+            "root": base_root,
+            "endpoints": endpoints,
+            "pages": pages_info,
+            "forms": forms,
+            "security_headers": security_headers,
+            "server_info": server_info,
+            "tls": tls_info,
+            "crawled_count": len(endpoints),
+        }
 
 try:
     from firebase_sync import push_alert  # optional; noop fallback if missing
@@ -43,6 +166,8 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5174",
+    "http://aurababy.life",
+    "https://aurababy.life",
 ]
 
 app.add_middleware(
@@ -142,7 +267,10 @@ def predict_vulnerability(file: UploadFile = File(...)):
 def network_graph(payload: GraphRequest):
     edges: List[Tuple[str, str]] = [tuple(edge) for edge in (payload.connections or [])]
     G = build_graph(payload.endpoints or [], edges)
-    return {"nodes": list(G.nodes), "edges": list(G.edges)}
+    # If your build_graph returns networkx Graph, nodes/edges will work; if fallback SimpleGraph, adjust accordingly
+    nodes = list(getattr(G, "nodes", [])) if not isinstance(G, (list, tuple)) else list(G)
+    edges_list = list(getattr(G, "edges", [])) if not isinstance(G, (list, tuple)) else []
+    return {"nodes": nodes, "edges": edges_list}
 
 @app.post("/network/paths")
 def attack_paths(payload: AttackPathsRequest):
@@ -249,6 +377,29 @@ def fullscan(
                 "cve": None,
                 "fixAvailable": False
             }
+        ],
+        # added aurababy demo entries
+        "https://aurababy.life": [
+            {
+                "id": "vuln-0",
+                "name": "Demo Sensitive Data Exposure",
+                "severity": "medium",
+                "description": "Demo: possible data exposure on profile endpoint.",
+                "affectedEndpoint": "/profile",
+                "cve": None,
+                "fixAvailable": False
+            }
+        ],
+        "http://aurababy.life": [
+            {
+                "id": "vuln-0",
+                "name": "Demo Sensitive Data Exposure",
+                "severity": "medium",
+                "description": "Demo: possible data exposure on profile endpoint.",
+                "affectedEndpoint": "/profile",
+                "cve": None,
+                "fixAvailable": False
+            }
         ]
     }
 
@@ -263,241 +414,39 @@ def fullscan(
                     {"time": "16:00", "attacks": 9},
                     {"time": "20:00", "attacks": 5},
                 ],
-                "week": [
-                    {"time": "Mon", "attacks": 12},
-                    {"time": "Tue", "attacks": 18},
-                    {"time": "Wed", "attacks": 20},
-                    {"time": "Thu", "attacks": 25},
-                    {"time": "Fri", "attacks": 19},
-                    {"time": "Sat", "attacks": 7},
-                    {"time": "Sun", "attacks": 10},
-                ],
-                "month": [
-                    {"time": "Week 1", "attacks": 45},
-                    {"time": "Week 2", "attacks": 60},
-                    {"time": "Week 3", "attacks": 55},
-                    {"time": "Week 4", "attacks": 70},
-                ],
-                "year": [
-                    {"time": "Jan", "attacks": 100},
-                    {"time": "Feb", "attacks": 120},
-                    {"time": "Mar", "attacks": 130},
-                    {"time": "Apr", "attacks": 140},
-                    {"time": "May", "attacks": 115},
-                    {"time": "Jun", "attacks": 160},
-                    {"time": "Jul", "attacks": 170},
-                    {"time": "Aug", "attacks": 180},
-                    {"time": "Sep", "attacks": 190},
-                    {"time": "Oct", "attacks": 200},
-                    {"time": "Nov", "attacks": 210},
-                    {"time": "Dec", "attacks": 220},
-                ]
             },
-            "vulnerabilityTrendsData": {
-                "day": [
-                    {"time": "00:00", "critical": 2, "high": 4, "medium": 7, "low": 8},
-                    {"time": "04:00", "critical": 1, "high": 3, "medium": 6, "low": 7},
-                    {"time": "08:00", "critical": 3, "high": 5, "medium": 8, "low": 9},
-                    {"time": "12:00", "critical": 4, "high": 6, "medium": 8, "low": 10},
-                    {"time": "16:00", "critical": 2, "high": 4, "medium": 7, "low": 8},
-                    {"time": "20:00", "critical": 2, "high": 3, "medium": 6, "low": 6},
-                ],
-                "week": [
-                    {"time": "Mon", "critical": 7, "high": 11, "medium": 16, "low": 21},
-                    {"time": "Tue", "critical": 6, "high": 10, "medium": 15, "low": 20},
-                    {"time": "Wed", "critical": 8, "high": 12, "medium": 18, "low": 23},
-                    {"time": "Thu", "critical": 9, "high": 13, "medium": 19, "low": 24},
-                    {"time": "Fri", "critical": 7, "high": 11, "medium": 16, "low": 21},
-                    {"time": "Sat", "critical": 3, "high": 5, "medium": 10, "low": 15},
-                    {"time": "Sun", "critical": 2, "high": 4, "medium": 8, "low": 13},
-                ],
-                "month": [
-                    {"time": "Week 1", "critical": 14, "high": 25, "medium": 36, "low": 48},
-                    {"time": "Week 2", "critical": 18, "high": 30, "medium": 45, "low": 60},
-                    {"time": "Week 3", "critical": 12, "high": 20, "medium": 30, "low": 40},
-                    {"time": "Week 4", "critical": 20, "high": 36, "medium": 54, "low": 72},
-                ],
-                "year": [
-                    {"time": "Jan", "critical": 35, "high": 65, "medium": 95, "low": 125},
-                    {"time": "Mar", "critical": 28, "high": 55, "medium": 75, "low": 110},
-                    {"time": "May", "critical": 40, "high": 80, "medium": 120, "low": 150},
-                    {"time": "Jul", "critical": 45, "high": 90, "medium": 130, "low": 170},
-                    {"time": "Sep", "critical": 50, "high": 100, "medium": 140, "low": 180},
-                    {"time": "Nov", "critical": 38, "high": 75, "medium": 110, "low": 145},
-                ]
-            },
-            "exploitedServicesData": [
-                {"name": "HTTP/80", "value": 40},
-                {"name": "SSH/22", "value": 18},
-                {"name": "FTP/21", "value": 12},
-                {"name": "SMB/445", "value": 15},
-                {"name": "RDP/3389", "value": 8},
-                {"name": "Other", "value": 7},
-            ]
         },
         "https://demo.testfire.net": {
             "attackFrequencyData": {
                 "day": [
                     {"time": "00:00", "attacks": 2},
-                    {"time": "04:00", "attacks": 3},
-                    {"time": "08:00", "attacks": 5},
                     {"time": "12:00", "attacks": 6},
-                    {"time": "16:00", "attacks": 7},
-                    {"time": "20:00", "attacks": 4},
                 ],
-                "week": [
-                    {"time": "Mon", "attacks": 6},
-                    {"time": "Tue", "attacks": 8},
-                    {"time": "Wed", "attacks": 12},
-                    {"time": "Thu", "attacks": 10},
-                    {"time": "Fri", "attacks": 9},
-                    {"time": "Sat", "attacks": 5},
-                    {"time": "Sun", "attacks": 4},
-                ],
-                "month": [
-                    {"time": "Week 1", "attacks": 18},
-                    {"time": "Week 2", "attacks": 25},
-                    {"time": "Week 3", "attacks": 23},
-                    {"time": "Week 4", "attacks": 30},
-                ],
-                "year": [
-                    {"time": "Jan", "attacks": 55},
-                    {"time": "Feb", "attacks": 60},
-                    {"time": "Mar", "attacks": 75},
-                    {"time": "Apr", "attacks": 80},
-                    {"time": "May", "attacks": 70},
-                    {"time": "Jun", "attacks": 90},
-                    {"time": "Jul", "attacks": 95},
-                    {"time": "Aug", "attacks": 110},
-                    {"time": "Sep", "attacks": 120},
-                    {"time": "Oct", "attacks": 130},
-                    {"time": "Nov", "attacks": 140},
-                    {"time": "Dec", "attacks": 150},
-                ]
-            },
-            "vulnerabilityTrendsData": {
-                "day": [
-                    {"time": "00:00", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "04:00", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "08:00", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "12:00", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "16:00", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "20:00", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                ],
-                "week": [
-                    {"time": "Mon", "critical": 2, "high": 4, "medium": 6, "low": 8},
-                    {"time": "Tue", "critical": 2, "high": 4, "medium": 6, "low": 8},
-                    {"time": "Wed", "critical": 3, "high": 6, "medium": 9, "low": 12},
-                    {"time": "Thu", "critical": 3, "high": 6, "medium": 9, "low": 12},
-                    {"time": "Fri", "critical": 2, "high": 4, "medium": 6, "low": 8},
-                    {"time": "Sat", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "Sun", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                ],
-                "month": [
-                    {"time": "Week 1", "critical": 4, "high": 8, "medium": 12, "low": 16},
-                    {"time": "Week 2", "critical": 5, "high": 10, "medium": 15, "low": 20},
-                    {"time": "Week 3", "critical": 3, "high": 6, "medium": 9, "low": 12},
-                    {"time": "Week 4", "critical": 7, "high": 14, "medium": 21, "low": 28},
-                ],
-                "year": [
-                    {"time": "Jan", "critical": 10, "high": 20, "medium": 30, "low": 40},
-                    {"time": "Mar", "critical": 12, "high": 24, "medium": 36, "low": 48},
-                    {"time": "May", "critical": 15, "high": 30, "medium": 45, "low": 60},
-                    {"time": "Jul", "critical": 18, "high": 36, "medium": 54, "low": 72},
-                    {"time": "Sep", "critical": 20, "high": 40, "medium": 60, "low": 80},
-                    {"time": "Nov", "critical": 16, "high": 32, "medium": 48, "low": 64},
-                ]
-            },
-            "exploitedServicesData": [
-                {"name": "HTTP/80", "value": 12},
-                {"name": "SSH/22", "value": 8},
-                {"name": "FTP/21", "value": 6},
-                {"name": "SMB/445", "value": 7},
-                {"name": "RDP/3389", "value": 5},
-                {"name": "Other", "value": 3},
-            ]
+            }
         },
         "https://juice-shop.herokuapp.com": {
             "attackFrequencyData": {
                 "day": [
                     {"time": "00:00", "attacks": 1},
-                    {"time": "04:00", "attacks": 2},
-                    {"time": "08:00", "attacks": 3},
                     {"time": "12:00", "attacks": 4},
-                    {"time": "16:00", "attacks": 2},
-                    {"time": "20:00", "attacks": 1},
                 ],
-                "week": [
-                    {"time": "Mon", "attacks": 2},
-                    {"time": "Tue", "attacks": 3},
-                    {"time": "Wed", "attacks": 4},
-                    {"time": "Thu", "attacks": 5},
-                    {"time": "Fri", "attacks": 3},
-                    {"time": "Sat", "attacks": 2},
-                    {"time": "Sun", "attacks": 1},
-                ],
-                "month": [
-                    {"time": "Week 1", "attacks": 5},
-                    {"time": "Week 2", "attacks": 7},
-                    {"time": "Week 3", "attacks": 6},
-                    {"time": "Week 4", "attacks": 8},
-                ],
-                "year": [
-                    {"time": "Jan", "attacks": 20},
-                    {"time": "Feb", "attacks": 22},
-                    {"time": "Mar", "attacks": 25},
-                    {"time": "Apr", "attacks": 28},
-                    {"time": "May", "attacks": 24},
-                    {"time": "Jun", "attacks": 30},
-                    {"time": "Jul", "attacks": 32},
-                    {"time": "Aug", "attacks": 34},
-                    {"time": "Sep", "attacks": 36},
-                    {"time": "Oct", "attacks": 38},
-                    {"time": "Nov", "attacks": 40},
-                    {"time": "Dec", "attacks": 42},
-                ]
-            },
-            "vulnerabilityTrendsData": {
+            }
+        },
+        "https://aurababy.life": {
+            "attackFrequencyData": {
                 "day": [
-                    {"time": "00:00", "critical": 1, "high": 1, "medium": 2, "low": 3},
-                    {"time": "04:00", "critical": 1, "high": 1, "medium": 2, "low": 3},
-                    {"time": "08:00", "critical": 1, "high": 2, "medium": 2, "low": 3},
-                    {"time": "12:00", "critical": 1, "high": 2, "medium": 2, "low": 3},
-                    {"time": "16:00", "critical": 1, "high": 1, "medium": 2, "low": 3},
-                    {"time": "20:00", "critical": 1, "high": 1, "medium": 2, "low": 3},
-                ],
-                "week": [
-                    {"time": "Mon", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "Tue", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "Wed", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "Thu", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "Fri", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "Sat", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                    {"time": "Sun", "critical": 1, "high": 2, "medium": 3, "low": 4},
-                ],
-                "month": [
-                    {"time": "Week 1", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "Week 2", "critical": 3, "high": 4, "medium": 5, "low": 6},
-                    {"time": "Week 3", "critical": 2, "high": 3, "medium": 4, "low": 5},
-                    {"time": "Week 4", "critical": 4, "high": 5, "medium": 6, "low": 7},
-                ],
-                "year": [
-                    {"time": "Jan", "critical": 4, "high": 6, "medium": 8, "low": 10},
-                    {"time": "Mar", "critical": 5, "high": 7, "medium": 9, "low": 11},
-                    {"time": "May", "critical": 6, "high": 8, "medium": 10, "low": 12},
-                    {"time": "Jul", "critical": 7, "high": 9, "medium": 11, "low": 13},
-                    {"time": "Sep", "critical": 8, "high": 10, "medium": 12, "low": 14},
-                    {"time": "Nov", "critical": 9, "high": 11, "medium": 13, "low": 15},
+                    {"time": "00:00", "attacks": 1},
+                    {"time": "12:00", "attacks": 2},
                 ]
-            },
-            "exploitedServicesData": [
-                {"name": "HTTP/80", "value": 8},
-                {"name": "SSH/22", "value": 6},
-                {"name": "FTP/21", "value": 4},
-                {"name": "SMB/445", "value": 5},
-                {"name": "RDP/3389", "value": 3},
-                {"name": "Other", "value": 2},
-            ]
+            }
+        },
+        "http://aurababy.life": {
+            "attackFrequencyData": {
+                "day": [
+                    {"time": "00:00", "attacks": 1},
+                    {"time": "12:00", "attacks": 2},
+                ]
+            }
         }
     }
 
@@ -511,7 +460,6 @@ def fullscan(
             5 if v["severity"] == "medium" else 2
             for v in vulnerabilities
         ]
-        # FIX: proper chain of edges, not a single pair
         connections = [(endpoints[i], endpoints[i + 1]) for i in range(len(endpoints) - 1)] if len(endpoints) > 1 else []
         G = build_graph(endpoints, connections)
         threat_level = int(100 * sum(preds) / len(preds)) if preds else 0
@@ -536,6 +484,12 @@ def fullscan(
             "https://cascade-demo.com": [
                 {"message": "Sensitive data exposure found!", "level": "critical"},
                 {"message": "Open redirect risk.", "level": "low"}
+            ],
+            "https://aurababy.life": [
+                {"message": "Demo site scanned", "level": "info"}
+            ],
+            "http://aurababy.life": [
+                {"message": "Demo site scanned", "level": "info"}
             ]
         }
 
@@ -553,13 +507,6 @@ def fullscan(
                 {"type": "sql", "probability": 0.1},
                 {"type": "ddos", "probability": 0.0}
             ]
-        elif url == "https://juice-shop.herokuapp.com":
-            attack_probs = [
-                {"type": "ddos", "probability": 0.7},
-                {"type": "sql", "probability": 0.2},
-                {"type": "mitm", "probability": 0.1},
-                {"type": "xss", "probability": 0.0}
-            ]
         else:
             attack_probs = [
                 {"type": "sql", "probability": 0.0},
@@ -574,7 +521,7 @@ def fullscan(
             "url": url,
             "threat_level": threat_level,
             "vulnerabilities": vulnerabilities,
-            "network": {"nodes": list(G.nodes), "edges": list(G.edges)},
+            "network": {"nodes": list(getattr(G, "nodes", [])), "edges": list(getattr(G, "edges", []))},
             "attack_paths": attack_paths,
             "alerts": alert_map.get(url, [
                 {"message": "High threat detected!", "level": "critical"} if threat_level > 75 else
@@ -594,7 +541,6 @@ def fullscan(
     if url:
         crawl_result = crawl_website(url)
         endpoints = [str(e) for e in (crawl_result.get("endpoints") or [])]
-        # FIX: proper chain A->B, B->C, ...
         connections = [(endpoints[i], endpoints[i + 1]) for i in range(len(endpoints) - 1)] if len(endpoints) > 1 else []
         df = pd.DataFrame({"endpoint": endpoints})
 
@@ -610,7 +556,6 @@ def fullscan(
             except Exception:
                 pass
 
-        # FIX: don't use df.get(...).tolist() with list default
         if isinstance(df, pd.DataFrame) and "endpoint" in df.columns:
             endpoints = df["endpoint"].astype(str).tolist()
         else:
@@ -637,7 +582,10 @@ def fullscan(
 
     vulnerabilities = []
     for idx, (ep, pred) in enumerate(zip(endpoints, preds)):
-        score = int(pred)
+        try:
+            score = int(pred)
+        except Exception:
+            score = 0
         if score >= 8:
             severity = "critical"
         elif score >= 6:
@@ -660,7 +608,7 @@ def fullscan(
         "url": url,
         "threat_level": threat_level,
         "vulnerabilities": vulnerabilities,
-        "network": {"nodes": list(G.nodes), "edges": list(G.edges)},
+        "network": {"nodes": list(getattr(G, "nodes", [])), "edges": list(getattr(G, "edges", []))},
         "attack_paths": attack_paths,
         "alerts": [
             {"message": "High threat detected!", "level": "critical"} if threat_level > 75

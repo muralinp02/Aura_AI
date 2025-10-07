@@ -154,7 +154,7 @@ Aura-AI/
 
 ```bash
 # 1) Clone
-git clone <your-repo-url>
+git clone https://github.com/muralinp02/Aura_AI.git
 cd Aura-AI
 
 # 2) Frontend deps

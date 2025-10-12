@@ -35,66 +35,16 @@
 
 ## Overview
 
-Aura-AI is an end-to-end cybersecurity platform for web applications. It combines classical security scanning with ML-assisted analytics to surface actionable insights, visualize attack paths, and push alerts—so you can move from “finding issues” to “fixing risks” quickly.
+Aura-AI is a comprehensive cybersecurity scanning and monitoring platform designed to identify, analyze, and report on various security vulnerabilities in web applications. The platform leverages AI to provide intelligent threat detection and actionable security insights.
 
----
+## Features
 
-## Core Capabilities
-
-* **Vulnerability Scanning**
-
-  * Detects **SQLi, XSS, CSRF, open redirects, weak headers**, and common misconfigs
-  * Quick / Full / Custom scans with tunable depth & scope
-
-* **Network & Attack-Path Visualization**
-
-  * Real-time graph of hosts, services, and edges
-  * Highlights **critical choke points** and **probable lateral paths**
-
-* **Monitoring & Alerts**
-
-  * Continuous watch on critical assets
-  * Push notifications (Firebase) for new high-risk findings
-
-* **Reporting**
-
-  * Executive & technical **PDF** reports with remediation guidance
-  * Trends, MTTR, severity distributions
-
-* **Dashboard Analytics**
-
-  * KPIs, historical trends, and filterable findings
-
-* **Auth & Roles**
-
-  * Firebase Authentication (email/password, providers)
-  * Guarded routes and basic RBAC patterns
-
----
-
-## Architecture
-
-```
-┌─────────────┐        HTTPS        ┌───────────────┐
-│  Frontend   │  <----------------> │   FastAPI     │
-│ React+Vite  │                     │  Backend API  │
-└──────┬──────┘                     └───────┬───────┘
-       │                                    │
-       │                                   Tasks: Crawl, Preprocess,
-       │                                   Model Inference, Graph Build,
-       │                                   Scan Orchestration, Report Gen
-       │
-┌──────▼──────┐                     ┌────────▼─────────┐
-│  Firebase   │ <------------------>│  Firestore/Store │
-│  Auth       │     Findings+Meta   │                  │
-└─────────────┘                     └──────────────────┘
-```
-
-* Visualization: **Recharts**, **vis-network**
-* Alerts: backend → **Firebase** (push/notification pipeline)
-* CORS: restricted to configured origins
-
----
+- **Vulnerability Scanning**: Detect SQL injections, XSS, and other common web vulnerabilities
+- **Network Monitoring**: Real-time network traffic analysis and visualization
+- **Security Reports**: Generate detailed security reports with remediation recommendations
+- **Dashboard Analytics**: Visualize security metrics and trends
+- **User Authentication**: Secure login and user management via Firebase
+- **Customizable Scans**: Configure scan types (Quick, Full, Custom) based on your needs
 
 ## Tech Stack
 

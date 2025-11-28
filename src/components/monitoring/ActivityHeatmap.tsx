@@ -1,4 +1,7 @@
 
+
+
+
 import { useEffect, useRef } from 'react';
 
 // Mock data: attacks per hour (0-23) for the past 7 days

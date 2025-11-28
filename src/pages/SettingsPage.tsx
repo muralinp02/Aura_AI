@@ -137,11 +137,11 @@ const SettingsPage = () => {
               <div className="grid gap-4">
                 <div className="space-y-2">
                   <Label>Display Name</Label>
-                  <Input defaultValue="John Smith" className="cyber-input" />
+                  <Input defaultValue="Sahana B" className="cyber-input" />
                 </div>
                 <div className="space-y-2">
                   <Label>Email Address</Label>
-                  <Input defaultValue="john.smith@example.com" className="cyber-input" readOnly />
+                  <Input defaultValue="sahana.b@gmail.com" className="cyber-input" readOnly />
                 </div>
                 <div className="space-y-2">
                   <Label>Job Role</Label>

@@ -76,7 +76,7 @@ const AppLayout = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <div className="h-8 w-8 rounded-full bg-cyber-subtle flex items-center justify-center">
-                  <span className="text-xs font-medium">JS</span>
+                  <span className="text-xs font-medium">TL</span>
                 </div>
                 <div className="space-y-0.5">
                   <p className="text-sm font-medium text-gray-200">Sahana B</p>

@@ -79,8 +79,8 @@ const AppLayout = () => {
                   <span className="text-xs font-medium">JS</span>
                 </div>
                 <div className="space-y-0.5">
-                  <p className="text-sm font-medium text-gray-200">John Smith</p>
-                  <p className="text-xs text-gray-400">Security Analyst</p>
+                  <p className="text-sm font-medium text-gray-200">Sahana B</p>
+                  <p className="text-xs text-gray-400">Project Developer </p>
                 </div>
               </div>
               <Button variant="ghost" size="icon" className="text-gray-400 hover:text-cyber-blue">
